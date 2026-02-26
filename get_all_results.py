@@ -8,6 +8,10 @@
 # Andreas Schueller <aschueller@uc.cl>
 #
 # HISTORY
+# 2026-02-26    0.6    Andreas    Added option to print individual MD runs, not means
+#                                 Also fixed a bug with RMSD_last_20 that actually
+#                                 returned the mean of the last 20 RMSDs of only the
+#                                 last replicate, instead of all replicates
 # 2025-06-24    0.5    Andreas    Added "n" (counts) to output
 # 2025-05-03    0.4.1  Andreas    Fixed bug with FEW version, output filename is
 #                                 *_statistics.out 
@@ -34,6 +38,35 @@ def print_line(lig, rec, deltaGs, rmsds):
     deltaG = statistics.mean(deltaGs)
     sd = stdev(deltaGs)
     if rmsds:
+        rmsds_flat = [item for sublist in rmsds for item in sublist] # flatten 2d list
+        mean_rmsd_all = statistics.mean(rmsds_flat)
+        sd_rmsd_all = stdev(rmsds_flat)
+        print(len(rmsds_flat))
+        rmsds_flat_20 = [item for sublist in rmsds for item in sublist[-20:]] # flatten 2d list, only last 20 entries
+        mean_rmsd_20 = statistics.mean(rmsds_flat_20)
+        sd_rmsd_20 = stdev(rmsds_flat_20)
+        print(len(rmsds_flat_20))
+    else:
+        mean_rmsd_all = ""
+        sd_rmsd_all = ""
+        mean_rmsd_20 = ""
+        sd_rmsd_20 = ""
+    Ki = math.exp(deltaG*1000/1.985/300)
+    pKi = -1 * math.log10(Ki)
+    print(lig, rec, deltaG, sd, Ki * 1e9, pKi, len(deltaGs), mean_rmsd_20, sd_rmsd_20, len(rmsds_flat_20), mean_rmsd_all, sd_rmsd_all, len(rmsds_flat), sep="\t")
+
+def print_deltaGs(deltaGs, rmsds):
+    headers = ["Ligand", "Receptor", "Average(deltaG)[kcal/mol]", "StDev(deltaG)[kcal/mol]", "Ki[nM]", "pKi", "n(deltaG)", "Average(ligang_RMSD_last_20)[A]", "StDev(ligand_RMSD_last_20)[A]", "n(RMSD_last_20)", "Average(ligang_RMSD)[A]", "StDev(ligand_RMSD)[A]", "n(RMSD)"]
+    print(*headers, sep="\t")
+    for rec in deltaGs:
+        for lig in deltaGs[rec]:
+            if rmsds:
+                print_line(lig, rec, deltaGs[rec][lig], rmsds[rec][lig])
+            else:
+                print_line(lig, rec, deltaGs[rec][lig], [])
+
+def print_line_replicate(lig, rec, replicate, deltaG, rmsds):
+    if rmsds:
         mean_rmsd_all = statistics.mean(rmsds)
         sd_rmsd_all = stdev(rmsds)
         mean_rmsd_20 = statistics.mean(rmsds[-20:])
@@ -45,16 +78,18 @@ def print_line(lig, rec, deltaGs, rmsds):
         sd_rmsd_20 = ""
     Ki = math.exp(deltaG*1000/1.985/300)
     pKi = -1 * math.log10(Ki)
-    print(lig, rec, deltaG, sd, Ki * 1e9, pKi, len(deltaGs), mean_rmsd_20, sd_rmsd_20, mean_rmsd_all, sd_rmsd_all, len(rmsds), sep="\t")
+    print(lig, rec, replicate, deltaG, Ki * 1e9, pKi, 1, mean_rmsd_20, sd_rmsd_20, len(rmsds[-20:]), mean_rmsd_all, sd_rmsd_all, len(rmsds), sep="\t")
 
-def print_deltaGs(deltaGs, rmsds):
-    print("Ligand", "Receptor", "Average(deltaG)[kcal/mol]", "StDev(deltaG)[kcal/mol]", "Ki[nM]", "pKi", "n(deltaG)", "Average(ligang_RMSD_last_20)[A]", "StDev(ligand_RMSD_last_20)[A]", "Average(ligang_RMSD)[A]", "StDev(ligand_RMSD)[A]", "n(RMSD)", sep="\t")
+def print_deltaGs_details(deltaGs, rmsds):
+    headers = ["Ligand", "Receptor", "Replicate", "deltaG[kcal/mol]", "Ki[nM]", "pKi", "n(deltaG)", "Average(ligang_RMSD_last_20)[A]", "StDev(ligand_RMSD_last_20)[A]", "n(RMSD_last_20)", "Average(ligang_RMSD)[A]", "StDev(ligand_RMSD)[A]", "n(RMSD)"]
+    print(*headers, sep="\t")
     for rec in deltaGs:
         for lig in deltaGs[rec]:
-            if rmsds:
-                print_line(lig, rec, deltaGs[rec][lig], rmsds[rec][lig])
-            else:
-                print_line(lig, rec, deltaGs[rec][lig], [])
+            for replicate in range(0, len(deltaGs[rec][lig])):
+                if rmsds:
+                    print_line_replicate(lig, rec, replicate, deltaGs[rec][lig][replicate], rmsds[rec][lig][replicate])
+                else:
+                    print_line_replicate(lig, rec, replicate, deltaGs[rec][lig][replicate], [])
 
 def parse_res(res, rep):
     deltaGs = dict()
@@ -96,7 +131,7 @@ def parse_rmsd(files, rep):
                     rmsd.append(float(tokens[1]))
             if not rec in rmsds:
                 rmsds[rec] = dict()
-            rmsds[rec][lig] = rmsd
+            rmsds[rec][lig].append(rmsd)
     return rmsds
 
 def parse_rmsd_few(files):
@@ -119,7 +154,7 @@ def parse_rmsd_few(files):
                 rmsds[rec] = dict()
             if not lig in rmsds[rec]:
                 rmsds[rec][lig] = []
-            rmsds[rec][lig].extend(rmsd)
+            rmsds[rec][lig].append(rmsd)
     return rmsds
 
 def parse_res_few(res):
@@ -145,17 +180,26 @@ def parse_res_few(res):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
                     prog='get_all_results.py',
-                    description='Retrieve all free energy calculation results from FAR MMPBSA and present a summary table with mean deltaG [kcal/mol], standard deviation, Ki [nM] (at 300 K) and pKi. Also reports RMSD [A] of ligand atoms for the last 20 frames (as for deltaG) and for all frames.')
+                    description='Retrieve all free energy calculation results from FEWer or FAR MMPBSA and present a summary table with mean deltaG [kcal/mol], standard deviation, Ki [nM] (at 300 K) and pKi. Also reports RMSD [A] of ligand atoms for the last 20 frames (as for deltaG) and for all frames.')
     parser.add_argument('--rep', default='by_lig', help='How are replicates provided? "by_lig": Ligands are replicated inside the SDF. "by_dir": Each replicate run resides in its own subdirectory. In both cases, replicate ligands need to have exactly the same name.')
     parser.add_argument('--met', default='FEW', help='FEW or FAR. Determines the MM-PBSA method.')
+    parser.add_argument('-d', '--details', action='store_true', help='Report individual values (replicates) instead of summary table (means). Implemented for FEWer only.')
     args = parser.parse_args()
 
     if args.met == "FEW":
         res = subprocess.check_output("find . -name *_statistics.out -print0 -exec tail -1 {} \;", shell=True, universal_newlines=True)
         deltaGs = parse_res_few(res)
+        #print(deltaGs)
         rmsd_files = subprocess.check_output("find . -name complex_all.rmsd -print", shell=True, universal_newlines=True)
         rmsds = parse_rmsd_few(rmsd_files)
-        print_deltaGs(deltaGs, rmsds)
+        #import pprint
+        #pprint.pprint(rmsds)
+        #print(len(rmsds['2w26_083']['ligand'][0]))
+        #print(len(rmsds['2w26_083']['ligand']))
+        if args.details:
+            print_deltaGs_details(deltaGs, rmsds)
+        else:
+            print_deltaGs(deltaGs, rmsds)
     else:
         print("FAR_results")
         res = subprocess.check_output("find . -name FAR_results.tsv -exec cat {} \;", shell=True, universal_newlines=True)
